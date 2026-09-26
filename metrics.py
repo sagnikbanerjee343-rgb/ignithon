@@ -242,6 +242,8 @@ def calculate_metrics(df: pd.DataFrame) -> dict[str, Any]:
             "complete",
             "improved",
             "achieved",
+            "employed",
+            "employment",
         }
 
         positive_outcomes = int(

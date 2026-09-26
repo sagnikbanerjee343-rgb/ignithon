@@ -24,6 +24,10 @@ _COLUMN_ALIASES = {
     "date_of_activity": "date",
     "activity_date": "date",
     "date": "date",
+    "participant_id": "person_id",
+    "program_name": "program",
+    "outcome_status": "outcome",
+    "positive_outcome": "outcome",
 }
 
 

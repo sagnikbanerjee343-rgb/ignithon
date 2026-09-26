@@ -1,228 +1,303 @@
-import streamlit as st
 import pandas as pd
-import io
+import streamlit as st
 
-# ==========================================
-# 1. PAGE CONFIGURATION & PREMIUM CSS INJECTION
-# ==========================================
-st.set_page_config(page_title="Impact Reporting", layout="wide", initial_sidebar_state="expanded")
+from data_processing import (
+    read_uploaded_file,
+    standardize_columns,
+    clean_dataframe,
+    find_data_issues,
+)
 
-st.markdown("""
+from metrics import (
+    detect_duplicates,
+    calculate_metrics,
+    create_source_summary,
+    create_limitations,
+)
+
+
+st.set_page_config(
+    page_title="Impact Reporting",
+    layout="wide",
+)
+
+
+st.markdown(
+    """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    
-    /* Global Font & Background */
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif !important;
-    }
     .stApp {
         background-color: #f4f2ee;
     }
-    
-    /* Remove default top padding */
-    .block-container {
-        padding-top: 2rem !important;
-        padding-bottom: 2rem !important;
-    }
-    
-    /* Custom Dark Header Card */
-    .hero-card {
+
+    .hero {
         background-color: #1a1a1a;
-        padding: 2.5rem;
-        border-radius: 24px;
-        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15);
+        padding: 2rem;
+        border-radius: 18px;
         margin-bottom: 2rem;
         border-left: 8px solid #fde047;
     }
-    .hero-card h1 {
-        color: #ffffff !important;
-        font-weight: 800 !important;
-        margin-bottom: 0.5rem !important;
-        font-size: 2.5rem !important;
-    }
-    .hero-card p {
-        color: #9ca3af !important;
-        font-size: 1.1rem !important;
-        font-weight: 500 !important;
+
+    .hero h1 {
+        color: white;
+        margin-bottom: 0.5rem;
     }
 
-    /* Sidebar Styling */
-    [data-testid="stSidebar"] {
-        background-color: #ffffff !important;
-        border-right: 1px solid #e5e7eb;
+    .hero p {
+        color: #d1d5db;
+        font-size: 1.05rem;
     }
-    
-    /* Metric Cards Styling */
+
     [data-testid="stMetric"] {
-        background-color: #ffffff;
+        background-color: white;
+        padding: 1rem;
+        border-radius: 15px;
         border: 1px solid #e5e7eb;
-        padding: 1.5rem;
-        border-radius: 20px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
-    }
-    [data-testid="stMetric"]:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-        border-color: #fde047;
-    }
-    [data-testid="stMetricLabel"] {
-        color: #6b7280 !important;
-        font-weight: 700 !important;
-        text-transform: uppercase !important;
-        letter-spacing: 0.05em !important;
-        font-size: 0.8rem !important;
-    }
-    [data-testid="stMetricValue"] {
-        color: #1a1a1a !important;
-        font-weight: 800 !important;
-        font-size: 2.5rem !important;
-    }
-
-    /* File Uploader Customization */
-    [data-testid="stFileUploadDropzone"] {
-        background-color: #ffffff !important;
-        border: 2px dashed #1a1a1a !important;
-        border-radius: 20px !important;
-        padding: 2rem !important;
-    }
-    
-    /* Tabs Customization */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background-color: transparent;
-    }
-    .stTabs [data-baseweb="tab"] {
-        background-color: #ffffff;
-        border-radius: 12px 12px 0 0;
-        border: 1px solid #e5e7eb;
-        border-bottom: none;
-        padding: 12px 24px;
-        font-weight: 600;
-        color: #4b5563;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #1a1a1a !important;
-        color: #fde047 !important;
-        border-color: #1a1a1a !important;
-    }
-    
-    /* Button Customization */
-    .stButton > button {
-        background-color: #1a1a1a !important;
-        color: #fde047 !important;
-        border-radius: 12px !important;
-        font-weight: 700 !important;
-        border: none !important;
-        padding: 0.5rem 2rem !important;
-    }
-    .stButton > button:hover {
-        background-color: #000000 !important;
-        transform: scale(1.02);
     }
     </style>
-""", unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
 
-# ==========================================
-# 2. SIDEBAR NAVIGATION (Fake CampusLife feel)
-# ==========================================
+
 with st.sidebar:
-    st.markdown("### ⚙️ Control Panel")
-    st.markdown("Manage your nonprofit data processing pipeline.")
-    st.markdown("---")
-    st.info("💡 **Tip:** Upload multiple files at once (CSV, JSON, Excel) to cross-reference data automatically.")
-    st.markdown("---")
-    st.markdown("**Team Project:** Ignithon Hackathon")
-
-# ==========================================
-# 3. HERO HEADER
-# ==========================================
-st.markdown("""
-    <div class="hero-card">
-        <h1>Traceable Impact Reporting</h1>
-        <p>Core Engine: Systematically combine, clean, and analyze operational files for small nonprofits.</p>
-    </div>
-""", unsafe_allow_html=True)
-
-# ==========================================
-# 4. FILE UPLOADER & LOGIC
-# ==========================================
-uploaded_files = st.file_uploader("Drop your organization's dataset here", type=["csv", "json", "xlsx"], accept_multiple_files=True)
-
-if uploaded_files:
-    file_names = [file.name for file in uploaded_files]
-    st.success(f"✅ Successfully loaded {len(uploaded_files)} files: {', '.join(file_names)}")
-    
-    # --- DOST KE FUNCTIONS YAHAN AAYENGE LATER ---
-    # df = dp.read_uploaded_file(uploaded_files)
-    # df = dp.standardize_columns(df)
-    # ... 
-    
-    # Mock Data for UI presentation
-    metrics = {
-        "row_count": 1250,
-        "total_beneficiaries": 4500,
-        "programs": 5,
-        "positive_outcome_rate": "78%",
-        "duplicates": 12,
-        "missing_values": 34
-    }
-    
-    issues_df = pd.DataFrame({
-        "source_file": ["attendance.csv", "feedback.json", "attendance.csv"],
-        "source_row": [42, 105, 89],
-        "issue_type": ["Missing Beneficiary ID", "Invalid Date Format", "Duplicate Entry"]
-    })
-    
-    # ==========================================
-    # 5. TABBED DASHBOARD (The core UI)
-    # ==========================================
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard Overview", "⚠️ Data Quality Issues", "🔍 Source Traceability", "📝 Limitations"])
-    
-    with tab1:
-        st.markdown("<br>", unsafe_allow_html=True)
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Total Beneficiaries", f"{metrics['total_beneficiaries']:,}")
-            st.metric("Total Rows Processed", f"{metrics['row_count']:,}")
-        with col2:
-            st.metric("Active Programs", metrics['programs'])
-            st.metric("Duplicates Removed", metrics['duplicates'])
-        with col3:
-            st.metric("Positive Outcome", metrics['positive_outcome_rate'])
-            st.metric("Missing Values", metrics['missing_values'])
-
-    with tab2:
-        st.markdown("### ⚠️ Data Quality Flags")
-        st.write("The system flagged the following anomalies. Check `source_file` and `source_row` for quick fixes.")
-        st.dataframe(issues_df, use_container_width=True, hide_index=True)
-
-    with tab3:
-        st.markdown("### 🔍 Source Traceability Mapping")
-        st.write("Tracking which metric originated from which specific file.")
-        st.info("Backend mapping function will populate this section.")
-
-    with tab4:
-        st.markdown("### 📝 System Limitations & Assumptions")
-        st.write("- **Assumption:** Blank outcome fields are excluded from the positive rate calculation.")
-        st.write("- **Limitation:** Fuzzy matching for names is not applied.")
-
-    # ==========================================
-    # 6. DOWNLOAD SECTION
-    # ==========================================
-    st.markdown("---")
-    csv_buffer = io.BytesIO()
-    pd.DataFrame({"Status": ["Processed", "Ready"]}).to_csv(csv_buffer, index=False)
-    
-    st.download_button(
-        label="Download Cleaned CSV Report",
-        data=csv_buffer.getvalue(),
-        file_name="cleaned_nonprofit_report.csv",
-        mime="text/csv"
+    st.title("Control Panel")
+    st.write("Upload nonprofit program files for cleaning and analysis.")
+    st.info(
+        "Supported formats: CSV, JSON, and Excel."
     )
 
+
+st.markdown(
+    """
+    <div class="hero">
+        <h1>Traceable Impact Reporting</h1>
+        <p>
+            Combine, clean, analyze, and trace nonprofit program data
+            from multiple sources.
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+uploaded_files = st.file_uploader(
+    "Upload nonprofit data files",
+    type=["csv", "json", "xlsx", "xls"],
+    accept_multiple_files=True,
+)
+
+
+if not uploaded_files:
+    st.info(
+        "Upload one or more CSV, JSON, or Excel files to begin."
+    )
+    st.stop()
+
+
+st.success(
+    f"{len(uploaded_files)} file(s) uploaded successfully."
+)
+
+
+processed_frames = []
+processing_errors = []
+
+
+for uploaded_file in uploaded_files:
+    try:
+        dataframe = read_uploaded_file(uploaded_file)
+        dataframe = standardize_columns(dataframe)
+        dataframe = clean_dataframe(dataframe)
+        processed_frames.append(dataframe)
+
+    except Exception as error:
+        processing_errors.append(
+            f"{uploaded_file.name}: {error}"
+        )
+
+
+if processing_errors:
+    st.warning("Some files could not be processed.")
+
+    for error in processing_errors:
+        st.error(error)
+
+
+if not processed_frames:
+    st.error("No files could be processed.")
+    st.stop()
+
+
+combined_df = pd.concat(
+    processed_frames,
+    ignore_index=True,
+    sort=False,
+)
+
+
+missing_issues = find_data_issues(combined_df)
+duplicate_issues = detect_duplicates(combined_df)
+
+all_issues = missing_issues + duplicate_issues
+
+metrics = calculate_metrics(combined_df)
+source_summary = create_source_summary(combined_df)
+limitations = create_limitations(
+    combined_df,
+    all_issues,
+)
+
+
+issues_df = pd.DataFrame(
+    all_issues,
+    columns=[
+        "type",
+        "message",
+        "person_id",
+        "name",
+        "source_file",
+        "source_row",
+    ],
+)
+
+
+positive_rate = metrics["positive_outcome_rate"]
+
+if positive_rate is None:
+    positive_rate_display = "N/A"
 else:
-    # Empty state prompt
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.info("👆 Please upload your data files (CSV, JSON, or Excel) in the dropzone above to generate the impact report.")
+    positive_rate_display = f"{positive_rate:.2f}%"
+
+
+tab1, tab2, tab3, tab4 = st.tabs(
+    [
+        "Dashboard",
+        "Data Quality Issues",
+        "Source Traceability",
+        "Limitations",
+    ]
+)
+
+
+with tab1:
+    st.subheader("Dashboard Overview")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric(
+            "Unique Beneficiaries",
+            f"{metrics['unique_beneficiaries']:,}",
+        )
+
+        st.metric(
+            "Total Records",
+            f"{metrics['total_records']:,}",
+        )
+
+    with col2:
+        st.metric(
+            "Active Programs",
+            metrics["total_programs"],
+        )
+
+        st.metric(
+            "Duplicate Records",
+            metrics["duplicate_count"],
+        )
+
+    with col3:
+        st.metric(
+            "Reported Positive Outcome",
+            positive_rate_display,
+        )
+
+        st.metric(
+            "Missing Values",
+            metrics["missing_value_count"],
+        )
+
+    st.subheader("Processed Data")
+
+    st.dataframe(
+        combined_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+with tab2:
+    st.subheader("Data Quality Issues")
+
+    if issues_df.empty:
+        st.success("No data-quality issues were detected.")
+    else:
+        st.write(
+            "These issues are linked to their original source file "
+            "and source row."
+        )
+
+        st.dataframe(
+            issues_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+with tab3:
+    st.subheader("Source Traceability")
+
+    if source_summary:
+        source_df = pd.DataFrame(
+            list(source_summary.items()),
+            columns=["source_file", "record_count"],
+        )
+
+        st.dataframe(
+            source_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.write(
+        "Each processed record retains its source file and source row."
+    )
+
+    traceability_columns = [
+        column
+        for column in [
+            "person_id",
+            "name",
+            "program",
+            "outcome",
+            "source_file",
+            "source_row",
+        ]
+        if column in combined_df.columns
+    ]
+
+    st.dataframe(
+        combined_df[traceability_columns],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+with tab4:
+    st.subheader("Limitations and Assumptions")
+
+    for limitation in limitations:
+        st.write(f"- {limitation}")
+
+
+st.divider()
+
+st.subheader("Download Report")
+
+st.download_button(
+    label="Download Cleaned CSV Report",
+    data=combined_df.to_csv(index=False).encode("utf-8"),
+    file_name="cleaned_nonprofit_report.csv",
+    mime="text/csv",
+)
