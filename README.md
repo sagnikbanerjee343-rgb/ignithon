@@ -1,2 +1,2 @@
 # ignithon
-This is our group project for ignithon-hackathon.
+This is team REDACTED REGIMENT.
