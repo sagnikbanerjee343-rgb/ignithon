@@ -6,18 +6,21 @@ from data_processing import (
     standardize_columns,
     clean_dataframe,
     find_data_issues,
+    remove_duplicate_records,
 )
 
 from metrics import (
     detect_duplicates,
+    detect_conflicts,
     calculate_metrics,
     create_source_summary,
+    create_summary_report,
     create_limitations,
 )
 
 
 st.set_page_config(
-    page_title="Impact Reporting",
+    page_title="Traceable Impact Reporting",
     layout="wide",
 )
 
@@ -61,9 +64,14 @@ st.markdown(
 
 with st.sidebar:
     st.title("Control Panel")
-    st.write("Upload nonprofit program files for cleaning and analysis.")
+
+    st.write(
+        "Upload nonprofit files for cleaning, checking, and reporting."
+    )
+
     st.info(
-        "Supported formats: CSV, JSON, and Excel."
+        "Use synthetic or sample data. "
+        "Do not upload sensitive beneficiary information."
     )
 
 
@@ -90,26 +98,37 @@ uploaded_files = st.file_uploader(
 
 if not uploaded_files:
     st.info(
-        "Upload one or more CSV, JSON, or Excel files to begin."
+        "Upload CSV, JSON, or Excel files to begin."
     )
     st.stop()
 
 
-st.success(
-    f"{len(uploaded_files)} file(s) uploaded successfully."
-)
-
-
+raw_frames = []
 processed_frames = []
 processing_errors = []
 
 
 for uploaded_file in uploaded_files:
     try:
-        dataframe = read_uploaded_file(uploaded_file)
-        dataframe = standardize_columns(dataframe)
-        dataframe = clean_dataframe(dataframe)
-        processed_frames.append(dataframe)
+        raw_dataframe = read_uploaded_file(
+            uploaded_file
+        )
+
+        raw_frames.append(
+            raw_dataframe.copy()
+        )
+
+        processed_dataframe = standardize_columns(
+            raw_dataframe.copy()
+        )
+
+        processed_dataframe = clean_dataframe(
+            processed_dataframe
+        )
+
+        processed_frames.append(
+            processed_dataframe
+        )
 
     except Exception as error:
         processing_errors.append(
@@ -118,33 +137,99 @@ for uploaded_file in uploaded_files:
 
 
 if processing_errors:
-    st.warning("Some files could not be processed.")
+    st.warning(
+        "Some files could not be processed."
+    )
 
     for error in processing_errors:
         st.error(error)
 
 
 if not processed_frames:
-    st.error("No files could be processed.")
+    st.error(
+        "No files could be processed."
+    )
     st.stop()
 
 
-combined_df = pd.concat(
+raw_combined_df = pd.concat(
+    raw_frames,
+    ignore_index=True,
+    sort=False,
+)
+
+all_processed_records_df = pd.concat(
     processed_frames,
     ignore_index=True,
     sort=False,
 )
 
 
-missing_issues = find_data_issues(combined_df)
-duplicate_issues = detect_duplicates(combined_df)
+missing_issues = find_data_issues(
+    all_processed_records_df
+)
 
-all_issues = missing_issues + duplicate_issues
+duplicate_issues = detect_duplicates(
+    all_processed_records_df
+)
 
-metrics = calculate_metrics(combined_df)
-source_summary = create_source_summary(combined_df)
+conflict_issues = detect_conflicts(
+    all_processed_records_df
+)
+
+all_issues = (
+    missing_issues
+    + duplicate_issues
+    + conflict_issues
+)
+
+
+cleaned_combined_df = remove_duplicate_records(
+    all_processed_records_df
+)
+
+
+metrics = calculate_metrics(
+    cleaned_combined_df
+)
+
+metrics["duplicate_count"] = len(
+    duplicate_issues
+)
+
+metrics["conflict_count"] = len(
+    conflict_issues
+)
+
+
+source_summary = create_source_summary(
+    all_processed_records_df
+)
+
+
+summary_df = create_summary_report(
+    cleaned_combined_df,
+    all_issues,
+    source_summary,
+)
+
+
+summary_df.loc[
+    summary_df["metric"]
+    == "Duplicate records removed",
+    "value",
+] = len(duplicate_issues)
+
+
+summary_df.loc[
+    summary_df["metric"]
+    == "Conflicting records",
+    "value",
+] = len(conflict_issues)
+
+
 limitations = create_limitations(
-    combined_df,
+    cleaned_combined_df,
     all_issues,
 )
 
@@ -162,26 +247,56 @@ issues_df = pd.DataFrame(
 )
 
 
-positive_rate = metrics["positive_outcome_rate"]
+if "person_id" in all_processed_records_df.columns:
+    valid_ids = (
+        all_processed_records_df["person_id"]
+        .notna()
+    )
+
+    removed_duplicate_rows = (
+        all_processed_records_df[
+            valid_ids
+            & all_processed_records_df[
+                "person_id"
+            ].duplicated(keep="first")
+        ]
+        .copy()
+    )
+else:
+    removed_duplicate_rows = pd.DataFrame()
+
+
+positive_rate = metrics[
+    "positive_outcome_rate"
+]
 
 if positive_rate is None:
     positive_rate_display = "N/A"
 else:
-    positive_rate_display = f"{positive_rate:.2f}%"
+    positive_rate_display = (
+        f"{positive_rate:.2f}%"
+    )
 
 
-tab1, tab2, tab3, tab4 = st.tabs(
+st.success(
+    f"{len(uploaded_files)} file(s) processed successfully."
+)
+
+
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
     [
-        "Dashboard",
-        "Data Quality Issues",
-        "Source Traceability",
+        "Summary Report",
+        "Original Records",
+        "Cleaned Records",
+        "Data Quality",
+        "Traceability",
         "Limitations",
     ]
 )
 
 
 with tab1:
-    st.subheader("Dashboard Overview")
+    st.subheader("Summary Report")
 
     col1, col2, col3 = st.columns(3)
 
@@ -192,8 +307,8 @@ with tab1:
         )
 
         st.metric(
-            "Total Records",
-            f"{metrics['total_records']:,}",
+            "Cleaned Records",
+            f"{len(cleaned_combined_df):,}",
         )
 
     with col2:
@@ -203,65 +318,126 @@ with tab1:
         )
 
         st.metric(
-            "Duplicate Records",
-            metrics["duplicate_count"],
+            "Duplicates Removed",
+            len(duplicate_issues),
         )
 
     with col3:
+        st.metric(
+            "Conflicting Records",
+            len(conflict_issues),
+        )
+
         st.metric(
             "Reported Positive Outcome",
             positive_rate_display,
         )
 
-        st.metric(
-            "Missing Values",
-            metrics["missing_value_count"],
+    st.dataframe(
+        summary_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("Metric Definitions"):
+        st.markdown(
+            """
+            **Unique Beneficiaries**  
+            Distinct non-empty person IDs after cleaning.
+
+            **Cleaned Records**  
+            Records remaining after repeated person IDs were removed.
+
+            **Duplicates Removed**  
+            Repeated records after the first occurrence of a person ID.
+
+            **Conflicting Records**  
+            Records where the same person has different values
+            across uploaded files.
+
+            **Reported Positive Outcome Rate**  
+            Positive outcomes divided by recorded outcomes.
+
+            These metrics describe the uploaded data. They do not
+            prove overall program impact.
+            """
         )
 
-    st.subheader("Processed Data")
+
+with tab2:
+    st.subheader("Original Records")
+
+    st.info(
+        "All uploaded records are preserved here, including duplicates."
+    )
 
     st.dataframe(
-        combined_df,
+        raw_combined_df,
         use_container_width=True,
         hide_index=True,
     )
 
 
-with tab2:
+with tab3:
+    st.subheader("Cleaned Records")
+
+    st.info(
+        "Only the first record for each valid person_id is retained."
+    )
+
+    st.dataframe(
+        cleaned_combined_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+with tab4:
     st.subheader("Data Quality Issues")
 
     if issues_df.empty:
-        st.success("No data-quality issues were detected.")
-    else:
-        st.write(
-            "These issues are linked to their original source file "
-            "and source row."
+        st.success(
+            "No data-quality issues were detected."
         )
-
+    else:
         st.dataframe(
             issues_df,
             use_container_width=True,
             hide_index=True,
         )
 
+    if not removed_duplicate_rows.empty:
+        st.subheader(
+            "Records Removed from Cleaned Data"
+        )
 
-with tab3:
-    st.subheader("Source Traceability")
-
-    if source_summary:
-        source_df = pd.DataFrame(
-            list(source_summary.items()),
-            columns=["source_file", "record_count"],
+        st.info(
+            "These duplicate rows were removed from the cleaned "
+            "view but remain available in Original Records."
         )
 
         st.dataframe(
-            source_df,
+            removed_duplicate_rows,
             use_container_width=True,
             hide_index=True,
         )
 
-    st.write(
-        "Each processed record retains its source file and source row."
+
+with tab5:
+    st.subheader("Source Traceability")
+
+    source_df = pd.DataFrame(
+        list(source_summary.items()),
+        columns=[
+            "source_file",
+            "record_count",
+        ],
+    )
+
+    st.dataframe(
+        source_df,
+        use_container_width=True,
+        hide_index=True,
     )
 
     traceability_columns = [
@@ -271,20 +447,26 @@ with tab3:
             "name",
             "program",
             "outcome",
+            "date",
             "source_file",
             "source_row",
+            "transformation_notes",
         ]
-        if column in combined_df.columns
+        if column in cleaned_combined_df.columns
     ]
 
+    st.subheader("Cleaned Record Traceability")
+
     st.dataframe(
-        combined_df[traceability_columns],
+        cleaned_combined_df[
+            traceability_columns
+        ],
         use_container_width=True,
         hide_index=True,
     )
 
 
-with tab4:
+with tab6:
     st.subheader("Limitations and Assumptions")
 
     for limitation in limitations:
@@ -293,11 +475,36 @@ with tab4:
 
 st.divider()
 
-st.subheader("Download Report")
+st.subheader("Download Reports")
 
-st.download_button(
-    label="Download Cleaned CSV Report",
-    data=combined_df.to_csv(index=False).encode("utf-8"),
-    file_name="cleaned_nonprofit_report.csv",
-    mime="text/csv",
-)
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.download_button(
+        label="Download Cleaned Records",
+        data=cleaned_combined_df
+        .to_csv(index=False)
+        .encode("utf-8"),
+        file_name="cleaned_nonprofit_records.csv",
+        mime="text/csv",
+    )
+
+with col2:
+    st.download_button(
+        label="Download Summary Report",
+        data=summary_df
+        .to_csv(index=False)
+        .encode("utf-8"),
+        file_name="nonprofit_summary_report.csv",
+        mime="text/csv",
+    )
+
+with col3:
+    st.download_button(
+        label="Download Issue Report",
+        data=issues_df
+        .to_csv(index=False)
+        .encode("utf-8"),
+        file_name="nonprofit_data_quality_issues.csv",
+        mime="text/csv",
+    )
